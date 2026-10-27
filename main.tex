@@ -1,0 +1,1031 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{geometry}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{booktabs,longtable,array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{microtype}
+\geometry{margin=25mm}
+\hypersetup{colorlinks=true,linkcolor=blue!45!black,urlcolor=blue!45!black}
+\lstset{
+  language=Python,
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\color{blue!50!black},
+  commentstyle=\color{green!35!black},
+  stringstyle=\color{red!45!black},
+  breaklines=true,
+  frame=single,
+  columns=fullflexible,
+  showstringspaces=false
+}
+\DeclareRobustCommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\shape}[1]{\mathbb{R}^{#1}}
+\newcommand{\analogi}[1]{\par\smallskip\noindent\textbf{Analogi.} #1\par\smallskip}
+\newcommand{\perhatikan}[1]{\par\smallskip\noindent\textbf{Perhatikan.} #1\par\smallskip}
+
+\title{Membaca dan Mengembangkan Small LLM Cerita\\
+\large Panduan kode, rumus, dan contoh langkah demi langkah}
+\author{Dokumentasi proyek \code{train-llm-from-scratch}}
+\date{23 Oktober 2026}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+Dokumen ini menjelaskan Small LLM dalam proyek ini dari teks mentah sampai
+kalimat yang dihasilkan. Sasaran pembacanya adalah orang yang sudah mengenal
+Python dasar, tetapi baru mulai mempelajari model bahasa. Setiap rumus
+langsung dihubungkan dengan bagian kode dan diterangkan memakai contoh kecil.
+Implementasi lokal dan notebook Colab dibahas secara terpisah bila cara
+evaluasi atau perangkatnya berbeda. Dokumen ini tidak mengandaikan model sudah
+mampu menulis cerita yang baik.
+\end{abstract}
+\tableofcontents
+\newpage
+
+\section{Peta besar: apa yang sedang dipelajari?}
+\label{sec:peta}
+
+Small LLM di sini adalah \emph{decoder Transformer} yang belajar menebak
+\textbf{byte berikutnya}. Ia tidak menerima arti kata secara langsung. Jika
+potongan teks berbunyi "Pagi itu", tugasnya adalah memberi probabilitas
+untuk byte yang mungkin muncul sesudahnya. Selama training, tebakan itu
+dibandingkan dengan byte yang benar; parameter model lalu diubah sedikit.
+
+\begin{center}
+\fbox{\parbox{0.88\linewidth}{\centering
+Cerita $\longrightarrow$ byte UTF-8 $\longrightarrow$ jendela input dan target
+$\longrightarrow$ embedding $\longrightarrow$ blok Transformer
+$\longrightarrow$ skor 257 token $\longrightarrow$ loss
+$\longrightarrow$ pembaruan bobot}}
+\end{center}
+
+\analogi{Bayangkan murid diminta melanjutkan cerita satu potong sangat kecil
+setiap kali. Tokenizer menyiapkan kartu-kartu potongan, attention mengizinkan
+murid melihat kartu sebelumnya, dan loss adalah nilai kesalahan dari guru.
+Optimizer mengubah kebiasaan murid berdasarkan kesalahan itu.}
+
+\subsection{Istilah yang dipakai}
+\begin{description}[leftmargin=35mm,style=nextline]
+\item[Token] Satu ID yang diprediksi model. Dalam proyek ini satu token
+biasanya satu byte; ID 256 berarti akhir cerita.
+\item[Parameter/bobot] Angka yang dipelajari, misalnya isi matriks pada
+lapisan linear.
+\item[Embedding] Vektor angka yang mewakili token atau posisinya.
+\item[Logit] Skor mentah untuk setiap kemungkinan token. Logit belum menjadi
+probabilitas.
+\item[Loss] Ukuran kesalahan prediksi. Lebih kecil pada data validasi berarti
+prediksi byte validasi lebih baik, selama datanya sama.
+\item[Gradien] Arah perubahan loss terhadap setiap parameter.
+\item[Checkpoint] Salinan bobot dan konfigurasi model untuk inferensi.
+\end{description}
+
+\subsection{Peta berkas kode}
+\begin{longtable}{p{0.32\linewidth}>{\raggedright\arraybackslash}p{0.60\linewidth}}
+\toprule
+Berkas & Tanggung jawab \\
+\midrule
+\endhead
+\code{small_llm/tokenizer.py} & Mengubah teks ke byte, mengenali akhir cerita,
+dan mengubah byte kembali ke teks. \\
+\code{small_llm/data.py} & Membaca satu cerita per berkas, membagi train dan
+validasi per cerita, membuat pasangan input--target. \\
+\code{small_llm/config.py} & Membaca JSON, memeriksa nilai konfigurasi, memilih
+MPS atau CPU pada program lokal. \\
+\code{small_llm/model.py} & Embedding, causal attention, blok Transformer,
+cross-entropy, dan generasi yang menjaga UTF-8 tetap valid. \\
+\code{small_llm/sparse.py} & Lima pilihan MLP: dense, pruned, topk, moe, dan set. \\
+\code{small_llm/train.py} & Training satu varian, evaluasi berkala, metrik,
+dan checkpoint. \\
+\code{small_llm/compare.py} & Menjalankan beberapa varian dan membuat tabel
+perbandingan. \\
+\code{small_llm/generate.py} & Memuat checkpoint dan melanjutkan prompt. \\
+\code{small_llm/__init__.py} & Menandai \code{small_llm} sebagai paket Python;
+tidak menjalankan training. \\
+\code{tests/test_small_llm.py} & Memeriksa sifat penting kode dengan model
+dan data kecil. \\
+Notebook Colab & Versi mandiri dalam
+\code{small_llm_frog_}\allowbreak\code{storytelling_colab.ipynb};
+seluruh kode ditulis di notebook, dengan dataset Hugging Face. \\
+\bottomrule
+\end{longtable}
+
+\section{Langkah 1: data menjadi token}
+\label{sec:data}
+\subsection{Tokenizer byte: \code{tokenizer.py}}
+
+UTF-8 mengubah karakter menjadi satu atau beberapa byte. Fungsi
+\code{encode(text)} menjalankan \code{text.encode("utf-8")} lalu mengubahnya
+menjadi daftar bilangan. Kosakatanya tetap:
+\[
+\mathcal{V}=\{0,1,\ldots,255,256\},\qquad |\mathcal{V}|=257.
+\]
+ID 0--255 adalah nilai byte. ID 256 adalah \emph{END\_OF\_STORY}, penanda
+akhir dokumen yang ditambahkan saat data dibaca. Contoh sederhana:
+\[
+\text{"A"}\mapsto[65], \qquad
+\text{"AB"}\mapsto[65,66], \qquad
+\text{"A" + akhir cerita}\mapsto[65,256].
+\]
+Huruf beraksen atau simbol tertentu bisa memerlukan lebih dari satu byte.
+Karena itu panjang konteks 256 berarti \textbf{256 byte/token}, bukan
+256 kata. Fungsi \code{decode(ids)} berhenti pada ID 256. Jika daftar byte
+yang diberikan rusak, fungsi itu mengganti bagian UTF-8 yang tidak lengkap
+agar teks tetap dapat ditampilkan.
+
+\analogi{Token seperti potongan puzzle. Satu huruf biasa dapat menjadi satu
+potong, sementara karakter lain perlu beberapa potong. Kartu 256 adalah
+tanda "cerita selesai".}
+
+\perhatikan{Tokenizer byte tidak mempunyai masalah kata "tidak dikenal",
+karena setiap teks UTF-8 dapat dipecah menjadi byte. Namun urutan token
+menjadi lebih panjang dibanding tokenizer subkata.}
+
+\subsection{Pemisahan cerita: \code{data.py}}
+
+\code{load_stories} membaca semua berkas \code{*.txt}, mengurutkan namanya,
+lalu mengacak dengan \code{seed}. Sebelum token digabung, berkas dipisah
+menjadi train dan validasi. Untuk $N$ berkas dan fraksi validasi $r$, kode
+menggunakan
+\[
+N_{\mathrm{valid}}=
+\max\!\left(1,\min\!\left(N-1,\operatorname{round}(Nr)\right)\right),
+\qquad
+N_{\mathrm{train}}=N-N_{\mathrm{valid}}.
+\]
+Sebagai contoh, $N=60$ dan $r=0{,}25$ menghasilkan 15 cerita validasi dan
+45 cerita train. Pemisahan per berkas mencegah awal dan akhir cerita yang
+sama masuk ke kedua kelompok. Setelah dibagi, setiap kelompok digabung
+menjadi satu aliran token, dengan ID 256 di antara cerita. Karena itu satu
+jendela dapat melintasi batas dua cerita; batasnya terlihat oleh model melalui
+ID 256.
+
+\analogi{Jangan membagi halaman satu buku ke dua ruang ujian. Simpan seluruh
+buku di ruang train atau seluruhnya di ruang validasi. Sesudah pembagian,
+halaman-halaman dalam tiap ruang baru disusun menjadi tumpukan.}
+
+\subsection{Pasangan input--target: \code{sample_batch}}
+
+Misalkan aliran token adalah $C=(c_0,c_1,\ldots,c_{N-1})$. Untuk panjang
+konteks $L$, sebuah titik awal $s$ menghasilkan
+\[
+X=(c_s,c_{s+1},\ldots,c_{s+L-1}),\qquad
+Y=(c_{s+1},c_{s+2},\ldots,c_{s+L}).
+\]
+Target $Y$ bergeser satu posisi dari input $X$. Jika alirannya
+$[10,20,30,40,50]$ dan $L=3$, salah satu pasangan adalah
+$X=[10,20,30]$ dan $Y=[20,30,40]$. Model belajar bahwa setelah 10
+muncul 20, setelah 20 muncul 30, dan seterusnya. \code{batch_size=B}
+berarti ada $B$ jendela seperti ini dalam satu microbatch. Bentuk tensor
+\[
+X,Y\in\mathbb{Z}^{B\times L}.
+\]
+Kode memilih $s$ secara acak dari aliran yang sesuai dan memindahkan batch
+ke \code{device}.
+
+\subsection{Konfigurasi: \code{config.py} dan tiga JSON}
+
+\code{ModelConfig} menyimpan $L$ (\code{context_length}), $d$
+(\code{n_embed}), jumlah head $H$, dan jumlah blok $K$.
+\code{TrainConfig} menyimpan data, output, seed, batch, langkah, dan
+pengaturan optimizer. \code{SparseConfig} menyimpan pilihan untuk tiap
+varian MLP. \code{load_config} membaca JSON dan membangun tiga kelompok
+pengaturan itu. Nilai yang tidak sah, misalnya $d$ tidak habis dibagi $H$,
+ditolak sebelum training.
+
+\begin{center}
+\begin{tabular}{p{0.35\linewidth}p{0.45\linewidth}}
+\toprule
+Konfigurasi & Kegunaan \\
+\midrule
+\code{configs/smoke.json} & Dua langkah per varian; memeriksa alur, bukan
+kualitas cerita. \\
+\code{configs/small_m1.json} & Model $d=192$, $H=4$, $K=4$, $L=256$ pada
+12 cerita demo. \\
+\code{stories_expanded_m1.json} & 60 cerita, fraksi validasi
+$0{,}25$, 600 langkah; output terpisah. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Pada program lokal, \code{device="auto"} memilih MPS jika tersedia dan CPU
+jika tidak. Notebook Colab memilih CUDA jika GPU aktif, selain itu CPU.
+Mengubah ukuran model membuat checkpoint lama tidak cocok dengan arsitektur
+baru.
+
+\section{Langkah 2: Transformer membuat prediksi}
+\label{sec:model}
+\subsection{Embedding token dan posisi}
+
+Untuk token $t_i$ pada posisi $i$, model mengambil dua vektor berdimensi $d$:
+\[
+\mathbf{x}_i=E_{\mathrm{token}}[t_i]+E_{\mathrm{pos}}[i],
+\quad E_{\mathrm{token}}\in\shape{257\times d},
+\quad E_{\mathrm{pos}}\in\shape{L\times d}.
+\]
+Penjumlahan ini dilakukan oleh \code{token_embedding} dan
+\code{position_embedding}. Vektor token memberi identitas potongan teks;
+vektor posisi memberi tahu di mana ia berada dalam jendela. Bentuk hasilnya
+$B\times L\times d$.
+
+\analogi{Kartu bertuliskan "pagi" memberi isi, nomor kursi memberi posisi.
+Dua informasi itu diperlukan agar murid dapat membedakan "pagi itu" dari
+"itu pagi".}
+
+\subsection{Causal attention: \code{CausalAttention}}
+
+Setiap head memproyeksikan vektor menjadi query, key, dan value:
+\[
+Q=XW_Q,\qquad K=XW_K,\qquad V=XW_V,\qquad d_h=d/H.
+\]
+Untuk posisi $i$ yang ingin memprediksi token berikutnya, skor melihat posisi
+$j$ adalah
+\[
+a_{ij}=\frac{\mathbf{q}_i^\top\mathbf{k}_j}{\sqrt{d_h}}+M_{ij},
+\qquad
+M_{ij}=
+\begin{cases}
+0,&j\le i,\\
+-\infty,&j>i.
+\end{cases}
+\]
+Softmax mengubah skor menjadi bobot perhatian
+$\alpha_{ij}=\exp(a_{ij})/\sum_{k\le i}\exp(a_{ik})$. Keluaran head pada
+posisi $i$ adalah $\mathbf{o}_i=\sum_{j\le i}\alpha_{ij}\mathbf{v}_j$.
+Keluaran semua head digabung dan diproyeksikan lagi.
+
+\analogi{Query adalah pertanyaan yang diajukan kata saat ini; key adalah
+label pada catatan lama; value adalah isi catatan. Aturan \emph{causal}
+menutup halaman-halaman masa depan. Tanpanya, model bisa mengintip jawaban
+saat latihan.}
+
+\perhatikan{Kode lokal membuat mask segitiga bawah dengan
+\code{torch.tril}. Notebook Colab memakai operasi
+\code{scaled_dot_product_attention(..., is_causal=True)}; tujuan matematisnya
+sama. Untuk $d=192$ dan $H=4$, tiap head memakai $d_h=48$ dimensi.}
+
+\subsection{Residual, LayerNorm, dan MLP}
+
+Satu \code{Block} menjalankan dua operasi berurutan:
+\begin{align}
+A &= X+\operatorname{Attention}(\operatorname{LN}(X)),\\
+X_{\mathrm{next}} &= A+\operatorname{MLP}(\operatorname{LN}(A)).
+\end{align}
+Tanda $+$ adalah \emph{residual connection}: informasi lama tetap punya
+jalur langsung. \code{LayerNorm} menstabilkan skala vektor. MLP dense
+mengembangkan lebar dari $d$ ke $4d$, menerapkan ReLU, lalu kembali ke $d$:
+\[
+\operatorname{MLP}(\mathbf{x})=
+W_2\,\operatorname{ReLU}(W_1\mathbf{x}+\mathbf{b}_1)+\mathbf{b}_2,
+\quad
+W_1\in\shape{4d\times d},\quad
+W_2\in\shape{d\times 4d}.
+\]
+Untuk $d=192$, lebar tersembunyi MLP adalah 768. Blok diulang $K=4$
+kali pada konfigurasi M1.
+
+\analogi{Attention mengumpulkan catatan yang relevan dari bagian cerita
+sebelumnya. MLP memikirkan ulang catatan itu untuk posisi saat ini.
+Residual seperti menyimpan salinan catatan asli agar tidak hilang saat
+ditafsirkan.}
+
+\subsection{Logit, probabilitas, dan prediksi berikutnya}
+
+Setelah blok terakhir, \code{final_norm} dan \code{lm_head} menghasilkan
+logit $z_{i,v}$ untuk setiap $v\in\mathcal V$:
+\[
+Z=\operatorname{Linear}(\operatorname{LN}(X_{\mathrm{akhir}})),
+\qquad Z\in\shape{B\times L\times257}.
+\]
+Probabilitas token $v$ pada posisi $i$ diperoleh melalui softmax,
+\[
+p(v\mid t_{\le i})=
+\frac{\exp(z_{i,v})}{\sum_{u=0}^{256}\exp(z_{i,u})}.
+\]
+Logit besar berarti peluang besar relatif terhadap token lain; logit
+sendiri bukan persentase.
+
+\section{Langkah 3: lima pilihan MLP dalam \code{sparse.py}}
+\label{sec:sparse}
+
+Semua varian memakai tokenizer, attention, data, dan prosedur training yang
+sama. Setelah Transformer dense dibuat, \code{convert_model} mengganti
+MLP pada tiap blok.
+
+\subsection{Dense: acuan}
+
+Dense memakai seluruh $4d$ neuron dan seluruh bobot $W_1,W_2$. Nilai loss,
+kecepatan, dan memori dense menjadi acuan untuk empat varian lain.
+\analogi{Semua pekerja di ruang kerja mendapat tugas pada setiap token.}
+
+\subsection{Pruned: mask bobot tetap}
+
+Kelas \code{PrunedMLP} mencari bobot dengan nilai mutlak terkecil saat
+model dibentuk. Untuk target sparsity $s$, sekitar fraksi $s$ elemen pada
+tiap matriks diberi mask nol. Operasi yang dipakai saat \code{forward}:
+\[
+W_{\mathrm{efektif}}=W\odot M,\qquad
+M_{ij}\in\{0,1\}.
+\]
+Simbol $\odot$ berarti perkalian elemen demi elemen. Posisi dengan $M_{ij}=0$
+tidak berpengaruh pada keluaran. Mask disimpan sebagai buffer, bukan parameter
+yang dilatih. Bobot matriks tetap dialokasikan penuh; implementasi ini tidak
+menjamin RAM atau waktu lebih kecil.
+
+\analogi{Sebuah peta jalan tetap dicetak lengkap, tetapi beberapa ruas diberi
+tanda tertutup. Menutup ruas bukan berarti ukuran kertas petanya mengecil.}
+
+\subsection{TopK: beberapa neuron dipakai per token}
+
+\code{TopKMLP} terlebih dahulu menghitung
+$\mathbf{h}=\operatorname{ReLU}(W_1\mathbf{x}+\mathbf b_1)$.
+Dari $4d$ aktivasi, hanya $k=\max(1,\operatorname{round}(4df))$ yang
+terbesar dipilih, dengan $f=\code{active_fraction}$. Keluaran:
+\[
+\mathbf y=\mathbf b_2+\sum_{j\in\operatorname{TopK}(\mathbf h,k)}
+h_j W_{2,:,j}.
+\]
+Dengan $d=192$ dan $f=0{,}25$, $4d=768$ dan $k=192$ neuron dipakai
+untuk setiap token. Lapisan pertama tetap menghitung seluruh 768 aktivasi.
+Pemilihan \code{topk} dan pengumpulan kolom dapat memiliki biaya sendiri;
+angka neuron aktif tidak otomatis berarti akselerasi empat kali.
+
+\analogi{Semua pekerja mengajukan ide awal, lalu hanya ide dengan skor
+tertinggi dibawa ke rapat akhir. Biaya mengumpulkan ide awal masih ada.}
+
+\subsection{MoE: memilih beberapa expert}
+
+\code{MoEMLP} membagi lebar MLP dense ke $E$ expert. Router atau
+\emph{gate} memberi logit $g_e$ untuk expert $e$ dan memilih himpunan
+$S=\operatorname{TopK}(\mathbf g,k)$:
+\[
+\alpha_e=
+\frac{\exp(g_e)}{\sum_{j\in S}\exp(g_j)}
+\quad(e\in S),\qquad
+\mathbf y=k\sum_{e\in S}\alpha_e\,\operatorname{Expert}_e(\mathbf x).
+\]
+Faktor $k$ berasal dari implementasi ini untuk menjaga skala ketika
+beberapa expert dijumlahkan. Nilai \code{top_k=2} dan
+\code{n_experts=4} berarti dua dari empat expert dipakai per token.
+Expert mula-mula menerima potongan bobot MLP dense, sementara router
+dilatih dari awal.
+
+Tanpa penyeimbang, router dapat terlalu sering memilih expert yang sama.
+Kode menambahkan loss bantu:
+\[
+\mathcal L_{\mathrm{aux}}
+=E\sum_{e=1}^{E} I_e L_e,
+\qquad
+I_e=\operatorname{mean}(\operatorname{softmax}(\mathbf g)_e),
+\quad
+L_e=\operatorname{mean}(\mathbf 1[e\in S]).
+\]
+Loss total saat training ialah
+$\mathcal L_{\mathrm{token}}+\lambda\mathcal L_{\mathrm{aux}}$.
+Nilai $\lambda$ diatur oleh \code{aux_coef}.
+Metrik \code{train_loss} dan \code{valid_loss} hanya melaporkan
+loss token agar prediksi dapat dibandingkan.
+
+\analogi{Router adalah petugas penerima naskah. Ia mengirim satu potongan
+cerita ke dua editor dari empat editor yang tersedia. Loss bantu mencegah
+satu editor terus-menerus kebanjiran pekerjaan.}
+
+\subsection{SET: mask berubah selama training}
+
+\code{SETMLP} membuat mask acak dengan kerapatan awal
+$\rho=\code{density}$, sehingga sekitar $\rho$ fraksi koneksi aktif.
+Selama training, bobot bermask nol dipaksa tetap nol. Setiap
+\code{rewire_every} langkah, \code{rewire_set} melakukan:
+\begin{enumerate}
+\item Cari koneksi aktif dengan $|w|$ terkecil dan matikan sejumlah
+$r=\operatorname{round}(\code{rewire_fraction}\times N_{\mathrm{aktif}})$.
+\item Pilih $r$ posisi tidak aktif secara acak dan hidupkan.
+\item Nolkan bobot pada posisi yang berubah dan state optimizer yang
+bentuknya sama dengan matriks bobot.
+\end{enumerate}
+Jumlah koneksi aktif tetap, tetapi lokasinya berubah. Menolkan state
+optimizer penting karena momentum lama tidak boleh terbawa ke sambungan
+baru.
+
+\analogi{Jumlah kursi dalam tim tetap. Secara berkala kursi dengan
+kontribusi terendah ditutup dan kursi baru dibuka di tempat lain. Catatan
+kerja lama pada kursi yang berpindah dihapus.}
+
+\perhatikan{\code{active_connections} menghitung elemen mask aktif pada
+\code{pruned} dan \code{set}. Ukuran itu tidak sama dengan jumlah parameter
+fisik atau banyaknya operasi GPU untuk \code{topk} dan \code{moe}.}
+
+\section{Langkah 4: kesalahan mengubah bobot}
+\label{sec:training}
+\subsection{Cross-entropy: \code{model.py}}
+
+Untuk target benar $y_{b,i}$ pada batch $b$, posisi $i$, model memperoleh
+probabilitas $p(y_{b,i}\mid X_{b,\le i})$. Loss rata-rata:
+\[
+\mathcal L_{\mathrm{token}}=
+-\frac{1}{BL}\sum_{b=1}^{B}\sum_{i=1}^{L}
+\log p(y_{b,i}\mid X_{b,\le i}).
+\]
+Contoh satu tebakan: jika token benar diberi peluang $0{,}5$, kesalahannya
+$-\log(0{,}5)\approx0{,}693$. Jika peluangnya hanya $0{,}01$,
+kesalahannya $-\log(0{,}01)\approx4{,}605$. Kode memakai
+\code{F.cross_entropy} pada logit yang diratakan ke bentuk
+$(BL)\times257$ dan target sebanyak $BL$.
+
+Jika seluruh 257 token diberi peluang sama, loss-nya
+$\log(257)\approx5{,}55$. Itu acuan kasar untuk tebakan seragam,
+\textbf{bukan} target mutu cerita. Loss rendah juga bisa terjadi karena
+model menguasai ejaan dan tanda baca tanpa memahami alur.
+
+\analogi{Guru menghukum tebakan yang yakin tetapi salah lebih besar
+daripada tebakan yang masih memberi peluang wajar pada jawaban benar.}
+
+\subsection{Akumulasi gradien dan optimizer: \code{train.py}}
+
+Satu langkah optimizer terdiri atas $G=\code{grad_accum}$ microbatch.
+Kode membagi loss tiap microbatch dengan $G$ sebelum \code{backward}.
+Maka gradien yang terkumpul setara dengan rata-ratanya:
+\[
+\mathbf g
+=\frac{1}{G}\sum_{j=1}^{G}
+\nabla_\theta\mathcal L_j.
+\]
+Jumlah posisi token yang diproses per langkah adalah
+$BGL$. Pada konfigurasi M1: $B=2$, $G=4$, $L=256$, sehingga
+$BGL=2048$ posisi per langkah. Dalam 300 langkah, model memproses
+$614\,400$ posisi, tetapi banyak jendela diambil berulang dari korpus
+yang jauh lebih kecil. Jumlah posisi diproses tidak sama dengan jumlah
+byte unik.
+
+Setelah \code{backward}, kode memotong norma gradien pada
+\code{grad_clip=c}:
+\[
+\mathbf g_{\mathrm{clip}}=
+\mathbf g\min\!\left(1,\frac{c}{\|\mathbf g\|_2}\right).
+\]
+Kemudian \code{AdamW} memakai riwayat gradien untuk memperbarui
+parameter. Bentuk ringkas satu langkahnya:
+\begin{align}
+\mathbf m_t&=\beta_1\mathbf m_{t-1}+(1-\beta_1)\mathbf g_t,\\
+\mathbf v_t&=\beta_2\mathbf v_{t-1}+(1-\beta_2)\mathbf g_t^2,\\
+\theta_{t+1}
+&\approx (1-\eta\lambda_{\mathrm{wd}})\theta_t
+-\eta\frac{\widehat{\mathbf m}_t}
+{\sqrt{\widehat{\mathbf v}_t}+\epsilon}.
+\end{align}
+Di sini $\eta$ adalah \code{learning_rate}; $\lambda_{\mathrm{wd}}$
+adalah \code{weight_decay}. Implementasi rinci, termasuk koreksi bias,
+ditangani PyTorch.
+
+\analogi{Gradien adalah petunjuk arah turun bukit. Akumulasi meminta
+pendapat beberapa kelompok kecil sebelum melangkah. Gradient clipping
+mencegah satu pendapat ekstrem membuat langkah terlalu jauh. AdamW
+mengingat arah yang sering membantu.}
+
+\subsection{Urutan satu langkah dalam kode}
+
+\begin{enumerate}
+\item \code{model.train()} mengaktifkan mode training dan
+\code{optimizer.zero_grad()} mengosongkan gradien lama.
+\item Ambil $G$ batch. Untuk setiap batch: hitung logit, loss token,
+tambahkan loss bantu MoE bila perlu, bagi dengan $G$, lalu
+\code{backward()}.
+\item Periksa bahwa loss berupa angka hingga; potong gradien; panggil
+\code{optimizer.step()}.
+\item Jika varian SET, paksa bobot tidak aktif ke nol dan jalankan
+rewiring pada intervalnya.
+\item Tulis \code{metrics.jsonl}: catat waktu langkah dan, pada interval
+tertentu, evaluasi pada data validasi.
+\end{enumerate}
+
+\perhatikan{Pada MPS, \code{_sync} menunggu operasi perangkat selesai
+sebelum dan sesudah pengukuran waktu. Tanpa sinkronisasi, waktu dapat
+terlihat lebih kecil karena tugas GPU masih berjalan.}
+
+\section{Langkah 5: evaluasi dan berkas hasil}
+\label{sec:evaluasi}
+
+\subsection{Evaluasi lokal: \code{evaluate} dalam \code{train.py}}
+
+Model masuk ke mode \code{eval} dan berjalan tanpa gradien. Fungsi ini
+mengambil \code{eval_batches} jendela acak dari cerita validasi,
+kemudian menghitung rata-rata cross-entropy:
+\[
+\mathcal L_{\mathrm{valid, lokal}}
+=\frac{1}{J}\sum_{j=1}^{J}\mathcal L_j,
+\qquad J=\code{eval_batches}.
+\]
+Generator titik awal selalu dibuat lagi dengan \code{seed + 2}. Jadi,
+pada setiap evaluasi, jendela validasi yang dipakai sama. Perubahan loss
+lebih mudah ditafsirkan karena pertanyaannya tidak berganti-ganti.
+Namun yang diukur tetap sampel jendela, bukan semua byte validasi.
+
+\analogi{Murid mengerjakan set soal ujian yang sama setiap beberapa jam.
+Kemajuannya terlihat lebih jelas daripada bila soalnya selalu diacak,
+tetapi hasil itu belum mewakili semua kemungkinan soal.}
+
+Baris langkah 0 menyimpan loss validasi sebelum pembaruan bobot.
+\code{eval_every} menentukan interval evaluasi berikutnya; langkah terakhir
+selalu dievaluasi. \code{log_every} menentukan kapan baris training dicatat.
+Pada baris tanpa evaluasi, \code{valid_loss} bernilai \code{null}, bukan nol.
+
+\subsection{Cara membaca hasil}
+
+\code{metrics.jsonl} berisi satu objek JSON per baris, misalnya:
+\begin{lstlisting}[language={}]
+{"step": 100, "train_loss": 2.20, "valid_loss": 2.30,
+ "step_seconds": 0.06}
+\end{lstlisting}
+\code{summary.json} meringkas nilai terakhir, jumlah parameter, pembagian
+berkas, jumlah token, waktu, dan memori. \code{model.pt} berisi bobot,
+konfigurasi arsitektur, konfigurasi sparsity, dan nama varian. Checkpoint
+lokal tidak menyimpan state AdamW atau posisi generator acak; menjalankan
+training lagi berarti memulai percobaan baru.
+
+\begin{center}
+\begin{tabular}{p{0.32\linewidth}p{0.59\linewidth}}
+\toprule
+Metrik & Cara membaca \\
+\midrule
+\code{train_loss} & Loss token pada microbatch langkah terakhir;
+berfluktuasi karena batch berubah. \\
+\code{valid_loss} & Loss pada jendela validasi yang dipilih dengan seed
+tetap; bandingkan dalam eksperimen yang datanya sama. \\
+\code{initial_valid_loss} & Titik awal sebelum training. \\
+\code{train_tokens_per_second} & $BGL\times\code{steps}$ dibagi waktu
+langkah training; evaluasi dan generasi tidak dihitung. \\
+\code{peak_process_rss_mb} & Puncak memori proses Python. Ini bukan ukuran
+lengkap semua memori GPU atau biaya produksi. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Jika \code{train_loss} turun tetapi \code{valid_loss} naik terus, model
+mungkin terlalu menyesuaikan diri pada data train. Jika keduanya turun,
+model belajar memprediksi token pada distribusi yang diuji. Kualitas
+cerita masih harus diperiksa dengan membaca contoh baru.
+
+Perplexity per token dapat dihitung dari cross-entropy:
+\[
+\operatorname{PPL}=\exp(\mathcal L).
+\]
+Karena token di sini adalah byte, ini adalah perplexity per byte.
+Jangan bandingkan langsung dengan angka dari tokenizer kata atau subkata.
+Program lokal tidak menyimpan perplexity sebagai kolom terpisah.
+
+\subsection{Perbandingan: \code{compare.py}}
+
+\code{compare.py} menjalankan dense dan empat varian sparse dengan
+konfigurasi yang sama. Secara bawaan tiap varian memakai proses Python
+terpisah, agar puncak RSS satu varian tidak terbawa ke pengukuran varian
+lain. Setelah itu program mengumpulkan \code{summary.json} menjadi
+\code{comparison.csv}. Opsi \code{--variants} memilih sebagian varian;
+\code{--overwrite} diperlukan jika folder output varian sudah ada dan
+pengguna memang ingin menggantinya. Dengan \code{--in-process}, varian
+dijalankan dalam satu proses dan angka puncak RSS per varian dikosongkan.
+
+\perhatikan{Perbandingan adil memerlukan data, pembagian train/validasi,
+seed, batch token, jumlah langkah, optimizer, dan perangkat yang sama.
+Jumlah parameter serta operasi tiap varian tetap berbeda. Loss dari
+\code{stories_demo} tidak langsung sebanding dengan loss dari
+\code{stories_expanded} atau dataset Frog karena data ujinya berubah.}
+
+\section{Langkah 6: model menulis lanjutan}
+\label{sec:generasi}
+
+\code{generate.py} memuat \code{model.pt} dengan
+\code{torch.load(..., weights_only=True)}, membangun kembali Transformer
+dan jenis MLP dari metadata, lalu memuat \code{state_dict}. Prompt diubah
+menjadi byte, kemudian \code{StoryTransformer.generate} mengulang:
+\begin{enumerate}
+\item Ambil paling banyak $L$ token terakhir sebagai konteks.
+\item Hitung logit pada posisi terakhir.
+\item Bagi logit dengan suhu $T>0$, ubah menjadi probabilitas,
+pilih satu token, lalu tambahkan ke konteks.
+\item Berhenti jika ID 256 terpilih atau batas token baru tercapai.
+\end{enumerate}
+Distribusi sampling pada suhu $T$ adalah
+\[
+p_T(v)=
+\frac{\exp(z_v/T)}
+{\sum_{u\in A}\exp(z_u/T)},\qquad v\in A,
+\]
+dengan $A$ himpunan token yang diizinkan. Suhu lebih rendah membuat
+pilihan lebih terkonsentrasi pada logit tinggi; suhu lebih tinggi
+membuat hasil lebih bervariasi. Mengubah suhu tidak mengajari model
+fakta atau alur baru.
+
+\subsection{Mengapa keluaran tetap UTF-8 tetapi bisa aneh?}
+
+Karena satu karakter Unicode dapat memakai beberapa byte, sampling byte
+secara bebas bisa menghasilkan urutan yang rusak. Implementasi lokal
+melacak apakah model sedang berada di tengah karakter UTF-8. Jika ya,
+hanya byte lanjutan yang sah diizinkan. Di akhir batas token, model
+tidak boleh memulai karakter yang tidak akan sempat diselesaikan.
+
+\analogi{Untuk menulis satu huruf yang terdiri dari tiga potong puzzle,
+model harus menyelesaikan potong kedua dan ketiga sebelum memulai huruf
+baru. Aturan ini menjaga bentuk tulisannya, bukan isi ceritanya.}
+
+Generasi menampilkan kembali prompt diikuti kelanjutannya. Batas
+\code{--max-new-tokens} menghitung byte baru, bukan kata atau
+kalimat. Model 300 langkah pada 12 cerita dapat membuat suku kata yang
+menyerupai bahasa Indonesia tetapi belum menghasilkan cerita runtut.
+
+\section{Tes: apa yang dibuktikan \code{test_small_llm.py}?}
+\label{sec:tes}
+
+\begin{enumerate}
+\item \textbf{Tokenizer dan data:} teks UTF-8 dapat dikodekan dan dibaca
+kembali; berkas train dan validasi tidak tumpang tindih; target adalah
+input yang bergeser satu token.
+\item \textbf{Causal attention:} mengubah token masa depan tidak mengubah
+logit posisi sebelumnya.
+\item \textbf{TopK dan MoE:} dalam pengaturan yang memakai semua
+neuron/expert, keluaran dapat disamakan dengan MLP dense sesuai
+konstruksi tes.
+\item \textbf{SET:} rewiring menjaga jumlah koneksi aktif dan menghapus
+state optimizer pada posisi yang berubah.
+\item \textbf{Checkpoint:} arsitektur sparse dapat dibangun kembali
+dan menghasilkan keluaran yang sama sesudah bobot dimuat.
+\item \textbf{Training singkat:} setiap varian dapat menjalankan satu
+langkah dan menyimpan checkpoint dengan loss hingga.
+\item \textbf{Generasi:} byte baru mengikuti urutan UTF-8 yang valid
+pada contoh yang sengaja memberi skor tinggi pada byte tidak sah.
+\end{enumerate}
+
+\perhatikan{Tes ini membuktikan sifat kode pada contoh kecil. Tes satu
+langkah tidak membuktikan bahwa model mampu bercerita. Kualitas bahasa
+memerlukan data dan evaluasi yang terpisah.}
+
+\section{Versi mandiri Colab: apa yang sama dan berbeda?}
+\label{sec:colab}
+
+Notebook \code{small_llm_frog_storytelling_colab.ipynb} menulis ulang
+tokenizer, Transformer, kelima varian MLP, training, checkpoint, dan
+generasi di dalam satu berkas. Ia tidak mengimpor
+\code{small_llm/*.py} atau cerita lokal. Data dibaca dari
+\href{https://huggingface.co/datasets/bigscience-data/roots_id_indonesian_frog_storytelling_corpus}{halaman dataset Frog Storytelling di Hugging Face}.
+Dataset tersebut mewajibkan persetujuan akses di situs Hugging Face dan
+login akun yang sama di Colab. Notebook memeriksa apakah kolom
+\code{text} ada dan menampilkan nama kolom jika tidak ada.
+
+\begin{enumerate}
+\item Sel pemasangan dependensi dan login menyiapkan pembacaan Parquet dari
+alamat \code{hf://}. Token akses tidak ditulis dalam notebook.
+\item Sel data membersihkan spasi, membuang baris kosong dan duplikat
+identik, lalu membagi dokumen train/validasi dengan seed tetap. Dokumen
+baru digabung menjadi aliran byte setelah pembagian.
+\item Sel model dan varian menerapkan rumus pada Bagian
+\ref{sec:model}--\ref{sec:sparse}. Attention Colab memakai operasi
+PyTorch \code{is_causal=True}.
+\item Sel training melatih \code{dense} secara bawaan.
+\code{RUN_COMPARISON} perlu diubah menjadi \code{True} untuk melatih
+empat varian lain.
+\item Sel evaluasi membaca semua byte validasi secara berurutan dalam
+potongan konteks, bukan beberapa jendela acak seperti \code{train.py}
+lokal. Ia menyimpan loss validasi, perplexity per byte, dan akurasi
+prediksi byte.
+\item Saat loss validasi membaik, notebook menyimpan
+\code{best_model.pt}. Model untuk generasi dimuat dari checkpoint
+terbaik ini, bukan otomatis dari langkah terakhir.
+\item Generasi notebook membatasi karakter pada karakter yang
+muncul dalam dokumen train melalui trie byte UTF-8. Aturan ini lebih
+ketat daripada mask UTF-8 umum pada program lokal, tetapi tetap tidak
+menjamin alur cerita masuk akal.
+\item Sel terakhir mengemas hasil ke ZIP agar dapat diunduh sebelum
+runtime Colab berhenti.
+\end{enumerate}
+
+\perhatikan{Dataset Frog berasal dari penceritaan atas gambar yang sama.
+Dokumen validasi dipisah, tetapi topik dan urutan adegan antar cerita
+dapat sangat mirip. Angka validasi karenanya tidak boleh dianggap
+bukti kemampuan menulis cerita bertopik bebas. Nilai notebook juga
+tidak langsung sebanding dengan nilai program lokal: dataset, cara
+evaluasi, jumlah langkah, dan checkpoint yang dipilih berbeda.}
+
+\section{Contoh ukuran tensor dari awal sampai akhir}
+\label{sec:ukuran}
+
+Dengan konfigurasi \code{small_m1.json}, ambil $B=2$, $L=256$,
+$d=192$, $H=4$, dan $V=257$. Ikuti satu batch:
+\begin{center}
+\begin{tabular}{p{0.45\linewidth}p{0.35\linewidth}}
+\toprule
+Tahap & Bentuk tensor \\
+\midrule
+Input dan target & $2\times256$ \\
+Embedding token + posisi & $2\times256\times192$ \\
+Query/key/value sebelum dipisah head & masing-masing
+$2\times256\times192$ \\
+Query/key/value sesudah dipisah head & masing-masing
+$2\times4\times256\times48$ \\
+Skor attention per head & $2\times4\times256\times256$ \\
+Aktivasi tersembunyi MLP dense & $2\times256\times768$ \\
+Logit keluaran & $2\times256\times257$ \\
+Target untuk cross-entropy & $512$ ID setelah diratakan \\
+\bottomrule
+\end{tabular}
+\end{center}
+Tabel ini berguna saat mengubah arsitektur. Jika sebuah operasi gagal
+karena ukuran tensor, cari baris pertama yang bentuknya tidak sesuai.
+
+\section{Langkah pengembangan yang dapat diulang}
+\label{sec:pengembangan}
+
+\subsection{Mulai dari satu pertanyaan}
+
+Contoh pertanyaan: apakah konteks lebih panjang membantu loss validasi
+dan kesinambungan kalimat? Buat satu baseline, simpan konfigurasi,
+seed, pembagian data, \code{metrics.jsonl}, dan beberapa prompt yang
+tetap. Pada percobaan berikutnya, ubah satu hal, misalnya
+\code{context_length}. Jika sekaligus mengubah dataset dan tokenizer,
+sulit mengetahui penyebab perubahan hasil.
+
+\begin{center}
+\begin{tabular}{p{0.21\linewidth}p{0.29\linewidth}p{0.39\linewidth}}
+\toprule
+Ide & Perubahan kode/konfigurasi & Pemeriksaan yang diperlukan \\
+\midrule
+Tambah data & Ganti \code{data_dir}; bagi per cerita &
+Periksa duplikat dan jumlah cerita validasi; jangan bandingkan
+loss mentah dengan dataset lama. \\
+Konteks lebih panjang & Naikkan \code{context_length} &
+Periksa RAM, bentuk mask/posisi, loss, dan kelanjutan cerita. \\
+Tokenizer subkata & Ganti \code{encode/decode}, ukuran kosakata,
+embedding, dan head keluaran & Latih ulang dari awal; checkpoint
+tokenizer byte tidak kompatibel. \\
+MLP sparse & Ubah satu opsi sparsity/topk/moe/set &
+Catat loss, jumlah parameter, koneksi aktif, waktu, dan memori. \\
+Berhenti lebih dini & Simpan checkpoint terbaik menurut
+\code{valid_loss} & Pastikan validasi tidak dipakai untuk melatih
+bobot; sediakan set uji terpisah untuk klaim akhir. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Urutan praktik yang disarankan}
+\begin{enumerate}
+\item \textbf{Periksa data.} Hitung cerita, panjang byte, duplikat,
+dan pembagian train/validasi. Baca beberapa contoh. Pastikan validasi
+berisi cerita utuh yang tidak ada di train.
+\item \textbf{Jalankan smoke hanya untuk memeriksa kode.} Dua langkah
+tidak cukup untuk menilai bahasa.
+\item \textbf{Latih dense lebih dulu.} Simpan kurva loss, ringkasan,
+dan checkpoint. Gunakan prompt dan suhu yang tetap saat membandingkan
+contoh generasi.
+\item \textbf{Periksa generalisasi.} Lihat apakah loss validasi masih
+turun. Jangan menyimpulkan kemampuan bercerita dari loss saja; baca
+apakah tokoh, peristiwa, dan akhir cerita saling berhubungan.
+\item \textbf{Ubah satu variabel.} Ulangi beberapa seed jika biaya
+memungkinkan. Varian sparse harus dibandingkan pada data dan anggaran
+training yang sama.
+\item \textbf{Simpan catatan.} Tulis hipotesis, konfigurasi, metrik,
+dan contoh keluaran. Hasil yang gagal juga berguna jika penyebabnya
+jelas.
+\end{enumerate}
+
+\analogi{Mengembangkan model seperti mencoba resep. Jika Anda mengganti
+tepung, suhu oven, dan waktu panggang sekaligus, Anda tidak tahu
+perubahan mana yang membuat hasil lebih baik atau buruk.}
+
+\subsection{Tiga batas yang sering menipu}
+\begin{enumerate}
+\item \textbf{Data kecil.} Model dapat menghafal susunan suku kata dan
+gaya tanpa belajar menyusun cerita baru. Bahkan 60 cerita tambahan
+masih korpus yang sangat kecil untuk sekitar 1,9 juta parameter.
+\item \textbf{Konteks byte pendek.} Jendela 256 byte sering hanya
+memuat sebagian paragraf. Model sulit menjaga hubungan jauh antara
+awal dan akhir cerita jika awalnya sudah keluar dari jendela.
+\item \textbf{Metrik token bukan metrik cerita.} Loss dan perplexity
+mengukur prediksi token. Cerita yang runtut perlu pemeriksaan isi:
+apakah tokoh konsisten, sebab-akibat jelas, dan akhir terkait
+dengan awal.
+\end{enumerate}
+
+\section{Perintah dan keluaran yang perlu dikenal}
+
+Perintah berikut adalah contoh untuk dijalankan pengguna dari root repo.
+Dokumen ini sendiri tidak menjalankan training.
+\begin{lstlisting}[language={}]
+# Pemeriksaan kecil
+.venv/bin/python -m unittest discover -s tests
+.venv/bin/python -m small_llm.compare --config configs/smoke.json --overwrite
+
+# Satu model dense dengan korpus tambahan
+.venv/bin/python -m small_llm.train \
+  --config configs/stories_expanded_m1.json --variant dense
+
+# Lihat metrik dan coba checkpoint
+cat artifacts/stories_expanded_m1/dense/summary.json
+cat artifacts/stories_expanded_m1/dense/metrics.jsonl
+.venv/bin/python -m small_llm.generate \
+  --checkpoint artifacts/stories_expanded_m1/dense/model.pt \
+  --prompt "Pagi itu, Mira menemukan "
+\end{lstlisting}
+Folder hasil yang sudah ada tidak ditimpa tanpa \code{--overwrite}.
+Opsi itu berarti mengganti hasil lama, sehingga sebaiknya simpan
+folder eksperimen yang ingin dipertahankan.
+
+\section{Ringkasan hubungan rumus dan kode}
+\begin{longtable}{p{0.25\linewidth}p{0.34\linewidth}>{\raggedright\arraybackslash}p{0.31\linewidth}}
+\toprule
+Konsep & Rumus inti & Lokasi kode \\
+\midrule
+\endhead
+Byte dan EOS & $\mathcal V=\{0,\ldots,256\}$ &
+\code{tokenizer.py}: \code{encode}, \code{decode} \\
+Batch bergeser & $Y_i=X_{i+1}$ &
+\code{data.py}: \code{sample_batch} \\
+Embedding & $\mathbf x_i=E_t[t_i]+E_p[i]$ &
+\code{model.py}: \code{StoryTransformer.forward} \\
+Attention causal & $\operatorname{softmax}(QK^\top/\sqrt{d_h}+M)V$ &
+\code{model.py}: \code{CausalAttention} \\
+MLP dense & $W_2\operatorname{ReLU}(W_1x+b_1)+b_2$ &
+\code{model.py}: \code{DenseMLP} \\
+Loss token & $-\operatorname{mean}\log p(y)$ &
+\code{model.py}: \code{F.cross_entropy} \\
+Mask sparse & $W_{\mathrm{efektif}}=W\odot M$ &
+\code{sparse.py}: \code{PrunedMLP}, \code{SETMLP} \\
+TopK neuron & $\sum_{j\in S}h_jW_{2,:,j}+b_2$ &
+\code{sparse.py}: \code{TopKMLP} \\
+MoE & $k\sum_{e\in S}\alpha_e E_e(x)$ &
+\code{sparse.py}: \code{MoEMLP} \\
+Akumulasi gradien & $G^{-1}\sum_j\nabla\mathcal L_j$ &
+\code{train.py}: \code{train_variant} \\
+Sampling suhu & $\operatorname{softmax}(z/T)$ &
+\code{model.py}: \code{generate} \\
+\bottomrule
+\end{longtable}
+
+\paragraph{Akhir panduan.}
+Untuk mengembangkan model, mulailah dari peta pada Bagian
+\ref{sec:peta}, ikuti satu batch melalui Bagian \ref{sec:data} dan
+\ref{sec:model}, lalu gunakan Bagian \ref{sec:pengembangan} untuk
+merancang satu percobaan yang dapat diperiksa kembali.
+
+\end{document}
+\section{Langkah 5: evaluasi dan berkas hasil}
+\label{sec:evaluasi}
+
+\subsection{Evaluasi lokal: \code{evaluate} dalam \code{train.py}}
+
+Model masuk ke mode \code{eval} dan berjalan tanpa gradien. Fungsi ini
+mengambil \code{eval_batches} jendela acak dari \textbf{cerita validasi},
+kemudian menghitung rata-rata cross-entropy:
+\[
+\mathcal L_{\mathrm{valid, lokal}}
+=\frac{1}{J}\sum_{j=1}^{J}\mathcal L_j,
+\qquad J=\code{eval_batches}.
+\]
+Generator titik awal selalu dibuat lagi dengan \code{seed + 2}. Artinya,
+pada setiap waktu evaluasi, jendela validasi yang dipakai sama. Perubahan
+loss lebih mudah ditafsirkan karena pertanyaannya tidak berganti-ganti.
+Namun yang diukur tetap \emph{sampel jendela}, bukan semua byte validasi.
+
+\analogi{Murid mengerjakan set soal ujian yang sama setiap beberapa jam.
+Kemajuannya terlihat lebih jelas daripada bila soalnya selalu diacak,
+tetapi hasil itu belum mewakili semua kemungkinan soal.}
+
+Baris langkah 0 menyimpan loss validasi \emph{sebelum} pembaruan bobot.
+\code{eval_every} menentukan interval evaluasi berikutnya; langkah terakhir
+selalu dievaluasi. \code{log_every} menentukan kapan baris training dicatat.
+Pada baris tanpa evaluasi, \code{valid_loss} bernilai \code{null}, bukan
+angka nol.
+
+\subsection{Cara membaca \code{metrics.jsonl} dan \code{summary.json}}
+
+\code{metrics.jsonl} berisi satu objek JSON per baris. Misalnya:
+\begin{lstlisting}[language={}]
+{"step": 100, "train_loss": 2.20, "valid_loss": 2.30,
+ "step_seconds": 0.06}
+\end{lstlisting}
+\code{summary.json} meringkas nilai terakhir, jumlah parameter, pembagian
+berkas, jumlah token, waktu, dan memori. \code{model.pt} berisi bobot,
+konfigurasi arsitektur, konfigurasi sparsity, dan nama varian. Checkpoint
+lokal \textbf{tidak} menyimpan state AdamW atau posisi generator acak;
+menjalankan training lagi berarti memulai percobaan baru, bukan meneruskan
+tepat dari langkah terakhir.
+
+\begin{center}
+\begin{tabular}{p{0.32\linewidth}p{0.59\linewidth}}
+\toprule
+Metrik & Cara membaca \\
+\midrule
+\code{train_loss} & Loss token pada microbatch langkah terakhir;
+berfluktuasi karena batch berubah. \\
+\code{valid_loss} & Loss pada jendela validasi yang dipilih dengan seed
+tetap; bandingkan dalam eksperimen yang datanya sama. \\
+\code{initial_valid_loss} & Titik awal sebelum training. \\
+\code{train_tokens_per_second} & $BGL\times\code{steps}$ dibagi waktu
+langkah training; evaluasi dan generasi tidak dihitung. \\
+\code{peak_process_rss_mb} & Puncak memori proses Python. Ini bukan ukuran
+lengkap semua memori GPU atau biaya produksi. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Jika \code{train_loss} turun tetapi \code{valid_loss} naik terus, model
+mungkin terlalu menyesuaikan diri pada data train. Jika keduanya turun,
+model belajar memprediksi token pada distribusi yang diuji. Kualitas
+cerita masih harus diperiksa dengan membaca contoh baru.
+
+Perplexity per token dapat dihitung dari cross-entropy:
+\[
+\operatorname{PPL}=\exp(\mathcal L).
+\]
+Karena token di sini adalah \textbf{byte}, ini adalah perplexity per byte.
+Jangan bandingkan langsung dengan angka dari tokenizer kata atau subkata.
+Program lokal tidak menyimpan perplexity sebagai kolom terpisah.
+
+\subsection{Perbandingan: \code{compare.py}}
+
+\code{compare.py} menjalankan dense dan empat varian sparse dengan
+konfigurasi yang sama. Secara bawaan tiap varian memakai proses Python
+terpisah, agar puncak RSS satu varian tidak terbawa ke pengukuran varian
+lain. Setelah itu program mengumpulkan \code{summary.json} menjadi
+\code{comparison.csv}. Opsi \code{--variants} memilih sebagian varian;
+\code{--overwrite} diperlukan jika folder output varian sudah ada dan
+pengguna memang ingin menggantinya. Dengan \code{--in-process}, varian
+dijalankan dalam satu proses dan angka puncak RSS per varian dikosongkan.
+
+\perhatikan{Perbandingan adil memerlukan data, pembagian train/validasi,
+seed, batch token, jumlah langkah, optimizer, dan perangkat yang sama.
+Jumlah parameter serta operasi tiap varian tetap berbeda. Loss dari
+\code{stories_demo} tidak langsung sebanding dengan loss dari
+\code{stories_expanded} atau dataset Frog karena data ujinya berubah.}
+
+\section{Langkah 6: model menulis lanjutan}
+\label{sec:generasi}
+
+\code{generate.py} memuat \code{model.pt} dengan
+\code{torch.load(..., weights_only=True)}, membangun kembali Transformer
+dan jenis MLP dari metadata, lalu memuat \code{state_dict}. Prompt diubah
+menjadi byte, kemudian \code{StoryTransformer.generate} mengulang:
+\begin{enumerate}
+\item Ambil paling banyak $L$ token terakhir sebagai konteks.
+\item Hitung logit pada posisi terakhir.
+\item Bagi logit dengan suhu $T>0$, ubah menjadi probabilitas,
+pilih satu token, lalu tambahkan ke konteks.
+\item Berhenti jika ID 256 terpilih atau batas token baru tercapai.
+\end{enumerate}
+Distribusi sampling pada suhu $T$ adalah
+\[
+p_T(v)=
+\frac{\exp(z_v/T)}
+{\sum_{u\in A}\exp(z_u/T)},\qquad v\in A,
+\]
+dengan $A$ himpunan token yang diizinkan. Suhu lebih rendah membuat
+pilihan lebih terkonsentrasi pada logit tinggi; suhu lebih tinggi
+membuat hasil lebih bervariasi. Mengubah suhu \textbf{tidak} mengajari
+model fakta atau alur baru.
+
+\subsection{Mengapa keluaran tetap UTF-8 tetapi bisa aneh?}
+
+Karena satu karakter Unicode dapat memakai beberapa byte, sampling byte
+secara bebas bisa menghasilkan urutan yang rusak. Implementasi lokal
+melacak apakah model sedang berada di tengah karakter UTF-8. Jika ya,
+hanya byte lanjutan yang sah diizinkan. Di akhir batas token, model
+tidak boleh memulai karakter yang tidak akan sempat diselesaikan.
+Karakter pengganti akibat byte rusak pun dapat dihindari.
+
+\analogi{Untuk menulis satu huruf yang terdiri dari tiga potong puzzle,
+model harus menyelesaikan potong kedua dan ketiga sebelum memulai huruf
+baru. Aturan ini hanya menjaga bentuk tulisannya, bukan isi ceritanya.}
+
+Generasi menampilkan kembali prompt diikuti kelanjutannya. Batas
+\code{--max-new-tokens} menghitung \textbf{byte baru}, bukan kata atau
+kalimat. Model 300 langkah pada 12 cerita dapat membuat suku kata yang
+menyerupai bahasa Indonesia tetapi belum menghasilkan cerita runtut.
+
+\section{Tes: apa yang dibuktikan \code{test_small_llm.py}?}
+\label{sec:tes}
+
+\begin{enumerate}
+\item \textbf{Tokenizer dan data:} teks UTF-8 dapat dikodekan dan dibaca
+kembali; berkas train dan validasi tidak tumpang tindih; target adalah
+input yang bergeser satu token.
+\item \textbf{Causal attention:} mengubah token masa depan tidak mengubah
+logit posisi sebelumnya.
+\item \textbf{TopK dan MoE:} dalam pengaturan yang memakai semua
+neuron/expert, keluaran dapat disamakan dengan MLP dense sesuai
+konstruksi tes.
+\item \textbf{SET:} rewiring menjaga jumlah koneksi aktif dan menghapus
+state optimizer pada posisi yang berubah.
+\item \textbf{Checkpoint:} arsitektur sparse dapat dibangun kembali
+dan menghasilkan keluaran yang sama sesudah bobot dimuat.
+\item \textbf{Training singkat:} setiap varian dapat menjalankan satu
+langkah dan menyimpan checkpoint dengan loss hingga.
+\item \textbf{Generasi:} byte baru mengikuti urutan UTF-8 yang valid
+pada contoh yang sengaja memberi skor tinggi pada byte tidak sah.
+\end{enumerate}
+
+\perhatikan{Tes ini membuktikan sifat kode pada contoh kecil. Tes satu
+langkah tidak membuktikan bahwa model mampu bercerita. Kualitas bahasa
+memerlukan data dan evaluasi yang terpisah.}
+
+

@@ -1,0 +1,27 @@
+{
+  "model": {"context_length": 256, "n_embed": 192, "n_head": 4, "n_blocks": 4},
+  "train": {
+    "data_dir": "data/stories_demo",
+    "out_dir": "artifacts/m1",
+    "device": "auto",
+    "seed": 42,
+    "batch_size": 2,
+    "grad_accum": 4,
+    "steps": 300,
+    "eval_every": 50,
+    "eval_batches": 8,
+    "log_every": 10,
+    "learning_rate": 0.0003
+  },
+  "sparse": {
+    "sparsity": 0.5,
+    "active_fraction": 0.25,
+    "n_experts": 4,
+    "top_k": 2,
+    "density": 0.5,
+    "rewire_fraction": 0.1,
+    "rewire_every": 50,
+    "aux_coef": 0.01
+  }
+}
+

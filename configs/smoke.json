@@ -1,0 +1,17 @@
+{
+  "model": {"context_length": 64, "n_embed": 64, "n_head": 4, "n_blocks": 2},
+  "train": {
+    "data_dir": "data/stories_demo",
+    "out_dir": "artifacts/smoke",
+    "device": "cpu",
+    "seed": 42,
+    "batch_size": 2,
+    "grad_accum": 1,
+    "steps": 2,
+    "eval_every": 2,
+    "eval_batches": 1,
+    "log_every": 1,
+    "learning_rate": 0.001
+  },
+  "sparse": {"rewire_every": 1}
+}

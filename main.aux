@@ -1,0 +1,62 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\gdef \LT@i {\LT@entry 
+    {1}{157.68144pt}\LT@entry 
+    {1}{285.14923pt}}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Peta besar: apa yang sedang dipelajari?}{2}{section.1}\protected@file@percent }
+\newlabel{sec:peta}{{1}{2}{Peta besar: apa yang sedang dipelajari?}{section.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.1}Istilah yang dipakai}{2}{subsection.1.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.2}Peta berkas kode}{2}{subsection.1.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}Langkah 1: data menjadi token}{3}{section.2}\protected@file@percent }
+\newlabel{sec:data}{{2}{3}{Langkah 1: data menjadi token}{section.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Tokenizer byte: \code  {tokenizer.py}}{3}{subsection.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Pemisahan cerita: \code  {data.py}}{3}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Pasangan input--target: \code  {sample_batch}}{4}{subsection.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Konfigurasi: \code  {config.py} dan tiga JSON}{4}{subsection.2.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}Langkah 2: Transformer membuat prediksi}{4}{section.3}\protected@file@percent }
+\newlabel{sec:model}{{3}{4}{Langkah 2: Transformer membuat prediksi}{section.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Embedding token dan posisi}{4}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Causal attention: \code  {CausalAttention}}{5}{subsection.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Residual, LayerNorm, dan MLP}{5}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Logit, probabilitas, dan prediksi berikutnya}{5}{subsection.3.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Langkah 3: lima pilihan MLP dalam \code  {sparse.py}}{5}{section.4}\protected@file@percent }
+\newlabel{sec:sparse}{{4}{5}{Langkah 3: lima pilihan MLP dalam \code {sparse.py}}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Dense: acuan}{6}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Pruned: mask bobot tetap}{6}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}TopK: beberapa neuron dipakai per token}{6}{subsection.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}MoE: memilih beberapa expert}{6}{subsection.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.5}SET: mask berubah selama training}{7}{subsection.4.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Langkah 4: kesalahan mengubah bobot}{7}{section.5}\protected@file@percent }
+\newlabel{sec:training}{{5}{7}{Langkah 4: kesalahan mengubah bobot}{section.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Cross-entropy: \code  {model.py}}{7}{subsection.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Akumulasi gradien dan optimizer: \code  {train.py}}{7}{subsection.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Urutan satu langkah dalam kode}{8}{subsection.5.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}Langkah 5: evaluasi dan berkas hasil}{8}{section.6}\protected@file@percent }
+\newlabel{sec:evaluasi}{{6}{8}{Langkah 5: evaluasi dan berkas hasil}{section.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Evaluasi lokal: \code  {evaluate} dalam \code  {train.py}}{8}{subsection.6.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Cara membaca hasil}{9}{subsection.6.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Perbandingan: \code  {compare.py}}{9}{subsection.6.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}Langkah 6: model menulis lanjutan}{9}{section.7}\protected@file@percent }
+\newlabel{sec:generasi}{{7}{9}{Langkah 6: model menulis lanjutan}{section.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Mengapa keluaran tetap UTF-8 tetapi bisa aneh?}{10}{subsection.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {8}Tes: apa yang dibuktikan \code  {test_small_llm.py}?}{10}{section.8}\protected@file@percent }
+\newlabel{sec:tes}{{8}{10}{Tes: apa yang dibuktikan \code {test_small_llm.py}?}{section.8}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {9}Versi mandiri Colab: apa yang sama dan berbeda?}{11}{section.9}\protected@file@percent }
+\newlabel{sec:colab}{{9}{11}{Versi mandiri Colab: apa yang sama dan berbeda?}{section.9}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {10}Contoh ukuran tensor dari awal sampai akhir}{11}{section.10}\protected@file@percent }
+\newlabel{sec:ukuran}{{10}{11}{Contoh ukuran tensor dari awal sampai akhir}{section.10}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {11}Langkah pengembangan yang dapat diulang}{12}{section.11}\protected@file@percent }
+\newlabel{sec:pengembangan}{{11}{12}{Langkah pengembangan yang dapat diulang}{section.11}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.1}Mulai dari satu pertanyaan}{12}{subsection.11.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.2}Urutan praktik yang disarankan}{12}{subsection.11.2}\protected@file@percent }
+\gdef \LT@ii {\LT@entry 
+    {1}{125.81102pt}\LT@entry 
+    {1}{166.78133pt}\LT@entry 
+    {1}{153.12456pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.3}Tiga batas yang sering menipu}{13}{subsection.11.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {12}Perintah dan keluaran yang perlu dikenal}{13}{section.12}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {13}Ringkasan hubungan rumus dan kode}{13}{section.13}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Akhir panduan.}{14}{section*.2}\protected@file@percent }
+\gdef \@abspage@last{14}
